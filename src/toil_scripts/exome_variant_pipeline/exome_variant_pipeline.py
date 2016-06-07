@@ -20,7 +20,7 @@ from toil_scripts.lib.urls import download_url_job, s3am_upload
 from toil_scripts.tools.mutation_callers import run_muse
 from toil_scripts.tools.mutation_callers import run_mutect
 from toil_scripts.tools.mutation_callers import run_pindel
-from toil_scripts.tools.preprocessing import run_gatk_preprocessing
+from toil_scripts.tools.preprocessing import run_germline_preprocessing
 from toil_scripts.tools.preprocessing import run_picard_create_sequence_dictionary
 from toil_scripts.tools.preprocessing import run_samtools_faidx
 from toil_scripts.tools.preprocessing import run_samtools_index
