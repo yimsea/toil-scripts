@@ -136,7 +136,7 @@ def untargz(input_targz_file, untar_to_dir):
     :return: path to untar-ed archive
     :rtype: str
     """
-    assert tarfile.is_tarfile(input_targz_file), 'Not a tar file.'
+    assert tarfile.is_tarfile(input_targz_file), 'Not a tar file.\n%s' % input_targz_file
     tarball = tarfile.open(input_targz_file)
     return_value = os.path.join(untar_to_dir, tarball.getmembers()[0].name)
     tarball.extractall(path=untar_to_dir)
