@@ -112,6 +112,7 @@ def docker_call(tool,
         if not os.path.isabs(filename):
             filename = os.path.join(work_dir, filename)
         assert(os.path.isfile(filename))
+    return
 
 
 def _fix_permissions(base_docker_call, tool, work_dir):

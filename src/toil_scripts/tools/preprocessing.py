@@ -90,12 +90,11 @@ def run_samtools_index(job, bam_id):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bam.bai'))
 
 
-def run_samtools_view(job, bam_id, ncores=1, flag='0'):
+def run_samtools_view(job, bam_id, flag='0'):
     """
     Filters BAM file using SAM bitwise flag
 
     :param str bam_id: BAM FileStoreID
-    :param int ncores: Number of cores allocated to job
     :param str flag: SAM bitwise flags
     :return str: BAM fileStoreID
     """
@@ -106,7 +105,7 @@ def run_samtools_view(job, bam_id, ncores=1, flag='0'):
                '-b',
                '-o', '/data/output.bam',
                '-F', str(flag),
-               '-@', str(ncores),
+               '-@', str(job.cores),
                '/data/input.bam']
     docker_call(work_dir=work_dir, parameters=command,
                 tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
@@ -115,20 +114,21 @@ def run_samtools_view(job, bam_id, ncores=1, flag='0'):
     return job.fileStore.writeGlobalFile(outpath)
 
 
-def run_samtools_sort(job, bam_id, ncores=1):
+def run_samtools_sort(job, bam_id):
     """
     Sorts BAM file using SAMtools
 
     :param str bam_id: BAM FileStoreID
-    :param int ncores: Number of cores allocated to job
     :return str: sorted BAM fileStoreID
     """
     work_dir = job.fileStore.getLocalTempDir()
     job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'input.bam'))
     command = ['sort',
-               '-@', str(ncores),
+               '-@', str(job.cores),
+               '-m', str(job.memory),
                '-o', '/data/output.bam',
                '/data/input.bam']
+
     outputs = {'output.bam': None}
     docker_call(work_dir=work_dir, parameters=command,
                 tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
@@ -137,7 +137,7 @@ def run_samtools_sort(job, bam_id, ncores=1):
     return job.fileStore.writeGlobalFile(outpath)
 
 
-def run_picard_create_sequence_dictionary(job, ref_id, xmx=10737418240):
+def run_picard_create_sequence_dictionary(job, ref_id):
     """
     Use Picard-tools to create reference dictionary
 
@@ -154,12 +154,12 @@ def run_picard_create_sequence_dictionary(job, ref_id, xmx=10737418240):
     docker_call(work_dir=work_dir,
                 parameters=command,
                 outputs=outputs,
-                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(xmx)},
+                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e')
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
 
-def picard_sort_sam(job, bam_id, xmx=10737418240):
+def picard_sort_sam(job, bam_id):
     """
     Uses picardtools SortSam to sort a BAM file
 
@@ -180,7 +180,7 @@ def picard_sort_sam(job, bam_id, xmx=10737418240):
     # picard-tools inhibits modifying java options, so use _JAVA_OPTIONS env variable
     docker_call(work_dir=work_dir,
                 parameters=command,
-                env={'_JAVA_OPTIONS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(xmx)},
+                env={'_JAVA_OPTIONS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outputs=outputs)
     outpath_bam = os.path.join(work_dir, 'sorted.bam')
@@ -190,7 +190,7 @@ def picard_sort_sam(job, bam_id, xmx=10737418240):
     return bam_id, bai_id
 
 
-def picard_mark_duplicates(job, bam_id, bai_id, xmx=10737418240):
+def picard_mark_duplicates(job, bam_id, bai_id):
     """
     Runs picardtools MarkDuplicates. Assumes the BAM file is coordinate sorted.
 
@@ -219,7 +219,7 @@ def picard_mark_duplicates(job, bam_id, bai_id, xmx=10737418240):
     outputs={'sample.mkdups.bam': None, 'sample.mkdups.bai': None}
     docker_call(work_dir=work_dir,
                 parameters=command,
-                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(xmx)},
+                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outputs=outputs)
 
@@ -265,13 +265,12 @@ def run_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, db
     return pr.rv(0), pr.rv(1)
 
 
-def run_gatk_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
-                           file_size=10737418240, xmx=10737418240, unsafe=False):
+def run_gatk_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
+                           file_size=10737418240, unsafe=False):
     """
     Pre-processing steps for running the GATK Germline pipeline
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param int cores: Maximum number of cores on a worker node
     :param str bam: Sample BAM FileStoreID
     :param str bai: Bam Index FileStoreID
     :param str ref: Reference genome FileStoreID
@@ -281,28 +280,24 @@ def run_gatk_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mill
     :param str mills: Mills VCF FileStoreID
     :param str dbsnp: DBSNP VCF FileStoreID
     :param int file_size: Approximate input BAM size. Default: 10G
-    :param str xmx: Java memory allocation. Default: 10G
     :param bool unsafe: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
     :return: BAM and BAI FileStoreIDs from Print Reads
     :rtype: tuple(str, str)
     """
     # MarkDuplicates runs best when Xmx <= 10G
-    mdups_memory = min(10737418240, xmx)
+    mdups_memory = min(10737418240, job.memory)
     mdups = job.wrapJobFn(picard_mark_duplicates,
                           bam, bai,
-                          xmx=mdups_memory,
-                          memory=mdups_memory, cores=cores, disk=file_size)
+                          memory=mdups_memory, cores=job.cores, disk=file_size)
 
     realigner_target_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
                                                 mdups.rv(0))
     realigner_target = job.wrapJobFn(run_realigner_target_creator,
-                                     cores,
                                      mdups.rv(0), mdups.rv(1),
                                      ref, ref_dict, fai,
                                      phase, mills,
-                                     xmx,
                                      unsafe=unsafe,
-                                     memory=xmx, disk=realigner_target_disk, cores=cores)
+                                     memory=job.memory, disk=realigner_target_disk, cores=job.cores)
 
     indel_realign_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
                                              mdups.rv(0))
@@ -311,32 +306,29 @@ def run_gatk_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mill
                                   bam, bai,
                                   ref, ref_dict, fai,
                                   phase, mills,
-                                  xmx,
                                   unsafe=unsafe,
-                                  memory=xmx, disk=indel_realign_disk, cores=cores)
+                                  memory=job.memory, disk=indel_realign_disk, cores=job.cores)
 
     base_recal_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
                                           mdups.rv(0))
     base_recal = job.wrapJobFn(run_base_recalibration,
-                               cores,
                                indel_realign.rv(0),
                                indel_realign.rv(1),
                                ref, ref_dict, fai,
                                dbsnp, mills,
-                               xmx,
                                unsafe=unsafe,
-                               memory=xmx, disk=base_recal_disk, cores=cores)
+                               memory=job.memory, disk=base_recal_disk, cores=job.cores)
 
     recalibrate_reads_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
                                                  mdups.rv(0))
     recalibrate_reads = job.wrapJobFn(run_print_reads,
-                                      cores,
                                       base_recal.rv(),
                                       indel_realign.rv(0), indel_realign.rv(1),
                                       ref, ref_dict, fai,
-                                      xmx,
                                       unsafe=unsafe,
-                                      memory=xmx, disk=recalibrate_reads_disk, cores=cores)
+                                      memory=job.memory,
+                                      disk=recalibrate_reads_disk,
+                                      cores=job.cores)
 
     job.addChild(mdups)
     mdups.addChild(realigner_target)
@@ -346,8 +338,7 @@ def run_gatk_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mill
     return recalibrate_reads.rv(0), recalibrate_reads.rv(1)
 
 
-def run_realigner_target_creator(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, mem,
-                                 unsafe=False):
+def run_realigner_target_creator(job, bam, bai, ref, ref_dict, fai, phase, mills, unsafe=False):
     """
     Creates intervals file needed for INDEL realignment
 
@@ -359,7 +350,6 @@ def run_realigner_target_creator(job, cores, bam, bai, ref, ref_dict, fai, phase
     :param str fai: Reference index FileStoreID
     :param str phase: Phase VCF FileStoreID
     :param str mills: Mills VCF FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
     :param bool unsafe: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
     :return: FileStoreID for the processed bam
     :rtype: str
@@ -391,12 +381,12 @@ def run_realigner_target_creator(job, cores, bam, bai, ref, ref_dict, fai, phase
                 outputs={'sample.intervals': None},
                 work_dir=work_dir,
                 parameters=parameters,
-                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(mem)))
+                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)))
     # Write to fileStore
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.intervals'))
 
 
-def run_indel_realignment(job, intervals, bam, bai, ref, ref_dict, fai, phase, mills, mem,
+def run_indel_realignment(job, intervals, bam, bai, ref, ref_dict, fai, phase, mills,
                           unsafe=False):
     """
     Creates realigned bams using the intervals file from previous step
@@ -410,7 +400,6 @@ def run_indel_realignment(job, intervals, bam, bai, ref, ref_dict, fai, phase, m
     :param str fai: Reference index FileStoreID
     :param str phase: Phase VCF FileStoreID
     :param str mills: Mills VCF FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
     :param bool unsafe: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
     :return: FileStoreID for the processed bam
     :rtype: tuple(str, str)
@@ -445,15 +434,14 @@ def run_indel_realignment(job, intervals, bam, bai, ref, ref_dict, fai, phase, m
                 outputs={'output.bam': None, 'output.bai': None},
                 work_dir=work_dir,
                 parameters=parameters,
-                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(mem)))
+                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)))
     # Write to fileStore
     indel_bam = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.bam'))
     indel_bai = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'output.bai'))
     return indel_bam, indel_bai
 
 
-def run_base_recalibration(job, cores, bam, bai, ref, ref_dict, fai, dbsnp, mills,
-                           mem=10737418240, unsafe=False):
+def run_base_recalibration(job, bam, bai, ref, ref_dict, fai, dbsnp, mills, unsafe=False):
     """
     Creates recal table used in Base Quality Score Recalibration
 
@@ -465,7 +453,7 @@ def run_base_recalibration(job, cores, bam, bai, ref, ref_dict, fai, dbsnp, mill
     :param str fai: Reference index FileStoreID
     :param str dbsnp: DBSNP VCF FileStoreID
     :param str mills: Mills VCF FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
+    :param str bqsr: BQSR recalibration table FileStoreID
     :param bool unsafe: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
     :return: FileStoreID for the processed bam
     :rtype: str
@@ -497,12 +485,12 @@ def run_base_recalibration(job, cores, bam, bai, ref, ref_dict, fai, dbsnp, mill
                 outputs={'recal_data.table': None},
                 work_dir=work_dir,
                 parameters=parameters,
-                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(mem)))
+                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)))
     # Write output to file store
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'recal_data.table'))
 
 
-def run_print_reads(job, cores, table, bam, bai, ref, ref_dict, fai, mem, unsafe=False):
+def run_print_reads(job, table, bam, bai, ref, ref_dict, fai, unsafe=False):
     """
     Creates BAM that has had the base quality scores recalibrated
 
@@ -513,7 +501,6 @@ def run_print_reads(job, cores, table, bam, bai, ref, ref_dict, fai, mem, unsafe
     :param str ref: Reference genome FileStoreID
     :param str ref_dict: Reference dictionary FileStoreID
     :param str fai: Reference index FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
     :param bool unsafe: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
     :return: FileStoreID for the processed bam
     :rtype: tuple(str, str)
@@ -543,7 +530,7 @@ def run_print_reads(job, cores, table, bam, bai, ref, ref_dict, fai, mem, unsafe
                 outputs={'bqsr.bam': None, 'bqsr.bai': None},
                 work_dir=work_dir,
                 parameters=parameters,
-                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(mem)))
+                env=dict(JAVA_OPTS='-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)))
     # Write ouptut to file store
     bam_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'bqsr.bam'))
     bai_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'bqsr.bai'))
