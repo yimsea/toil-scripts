@@ -236,32 +236,40 @@ def run_gatk_preprocessing(job, bam_id, bai_id, ref, ref_dict, fai, phase, mills
     """
     # MarkDuplicates runs best when Xmx <= 10G
     mdups_memory = min(10737418240, job.memory)
+    mdups_disk = PromisedRequirement(lambda bam: 2 * bam.size, bam_id)
     mdups = job.wrapJobFn(picard_mark_duplicates,
-                          bam_id, bai_id,
-                          memory=mdups_memory, cores=job.cores, disk=2 * file_size)
+                          bam_id,
+                          bai_id,
+                          cores=job.cores,
+                          disk=mdups_disk,
+                          memory=mdups_memory)
 
-    # Estimate disk resource as twice the input bam plus 10G of reference data
+    # Estimate disk resources as twice the input bam size plus 10G of reference data
     realigner_target_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
                                                 mdups.rv(0))
     realigner_target = job.wrapJobFn(run_realigner_target_creator,
-                                     mdups.rv(0), mdups.rv(1),
+                                     mdups.rv(0),
+                                     mdups.rv(1),
                                      ref, ref_dict, fai,
                                      phase, mills,
                                      unsafe=unsafe,
-                                     memory=job.memory, disk=realigner_target_disk, cores=job.cores)
+                                     cores=job.cores,
+                                     disk=realigner_target_disk,
+                                     memory=job.memory)
 
-    # Estimate disk resource as twice the input bam plus 10G of reference data
     indel_realign_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
                                              mdups.rv(0))
     indel_realign = job.wrapJobFn(run_indel_realignment,
                                   realigner_target.rv(),
-                                  mdups.rv(0), mdups.rv(1),
+                                  mdups.rv(0),
+                                  mdups.rv(1),
                                   ref, ref_dict, fai,
                                   phase, mills,
                                   unsafe=unsafe,
-                                  memory=job.memory, disk=indel_realign_disk, cores=job.cores)
+                                  cores=job.cores,
+                                  disk=indel_realign_disk,
+                                  memory=job.memory)
 
-    # Estimate disk resource as twice the input bam plus 10G of reference data
     base_recal_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
                                           indel_realign.rv(0))
     base_recal = job.wrapJobFn(run_base_recalibration,
@@ -270,19 +278,21 @@ def run_gatk_preprocessing(job, bam_id, bai_id, ref, ref_dict, fai, phase, mills
                                ref, ref_dict, fai,
                                dbsnp, mills,
                                unsafe=unsafe,
-                               memory=job.memory, disk=base_recal_disk, cores=job.cores)
+                               cores=job.cores,
+                               disk=base_recal_disk,
+                               memory=job.memory)
 
-    # Estimate disk resource as twice the input bam plus 10G of reference data
     recalibrate_reads_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
                                                  indel_realign.rv(0))
     recalibrate_reads = job.wrapJobFn(run_print_reads,
                                       base_recal.rv(),
-                                      indel_realign.rv(0), indel_realign.rv(1),
+                                      indel_realign.rv(0),
+                                      indel_realign.rv(1),
                                       ref, ref_dict, fai,
                                       unsafe=unsafe,
-                                      memory=job.memory,
+                                      cores=job.cores,
                                       disk=recalibrate_reads_disk,
-                                      cores=job.cores)
+                                      memory=job.memory)
 
     job.addChild(mdups)
     mdups.addChild(realigner_target)
