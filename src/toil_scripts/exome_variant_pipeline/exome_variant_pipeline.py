@@ -53,8 +53,10 @@ def reference_preprocessing(job, samples, config):
     :param list[list] samples: A nested list of samples containing sample information
     """
     job.fileStore.logToMaster('Processed reference files')
+    mem = '2G' if config.ci_test else '10G'
     config.fai = job.addChildJobFn(run_samtools_faidx, config.reference).rv()
-    config.dict = job.addChildJobFn(run_picard_create_sequence_dictionary, config.reference).rv()
+    config.dict = job.addChildJobFn(run_picard_create_sequence_dictionary, config.reference,
+                                    memory=mem).rv()
     job.addFollowOnJobFn(map_job, download_sample, samples, config)
 
 
@@ -108,12 +110,12 @@ def preprocessing_declaration(job, config):
         job.fileStore.logToMaster('Ran preprocessing: ' + config.uuid)
         disk = '1G' if config.ci_test else '20G'
         mem = '2G' if config.ci_test else '10G'
-        processed_normal = job.wrapJobFn(run_preprocessing, config.cores, config.normal_bam, config.normal_bai,
+        processed_normal = job.wrapJobFn(run_preprocessing, config.normal_bam, config.normal_bai,
                                          config.reference, config.dict, config.fai, config.phase, config.mills,
-                                         config.dbsnp, mem, cores=1, memory=mem, disk=disk)
-        processed_tumor = job.wrapJobFn(run_preprocessing, config.cores, config.tumor_bam, config.tumor_bai,
+                                         config.dbsnp, cores=config.cores, memory=mem, disk=disk)
+        processed_tumor = job.wrapJobFn(run_preprocessing, config.tumor_bam, config.tumor_bai,
                                         config.reference, config.dict, config.fai, config.phase, config.mills,
-                                        config.dbsnp, mem, cores=1, memory=mem, disk=disk)
+                                        config.dbsnp, cores=config.cores, memory=mem, disk=disk)
         static_workflow = job.wrapJobFn(static_workflow_declaration, config, processed_normal.rv(0),
                                         processed_normal.rv(1), processed_tumor.rv(0), processed_tumor.rv(1))
         job.addChild(processed_normal)

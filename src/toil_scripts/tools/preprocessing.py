@@ -157,7 +157,7 @@ def picard_mark_duplicates(job, bam_id, bai_id):
                'METRICS_FILE=metrics.txt',
                'ASSUME_SORTED=true',
                'CREATE_INDEX=true',
-               'VALIDATION_STRINGENCY=LENIENT' # Ignores minor formatting issues
+               'VALIDATION_STRINGENCY=LENIENT'  # Ignores minor formatting issues
                ]
 
     outputs={'sample.mkdups.bam': None, 'sample.mkdups.bai': None}
@@ -174,8 +174,7 @@ def picard_mark_duplicates(job, bam_id, bai_id):
     return bam_id, bai_id
 
 
-def run_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
-                      mem=10737418240, unsafe=False):
+def run_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp, unsafe=False):
     """
     Convenience method for grouping together GATK preprocessing
 
@@ -194,13 +193,13 @@ def run_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
     :rtype: tuple(str, str)
     """
     rtc = job.wrapJobFn(run_realigner_target_creator, bam, bai, ref, ref_dict,
-                        fai, phase, mills, mem, unsafe, cores=job.cores)
+                        fai, phase, mills, unsafe, cores=job.cores, memory=job.memory)
     ir = job.wrapJobFn(run_indel_realignment, rtc.rv(), bam, bai, ref, ref_dict,
-                       fai, phase, mills, mem, unsafe, cores=job.cores)
+                       fai, phase, mills, unsafe, cores=job.cores, memory=job.memory)
     br = job.wrapJobFn(run_base_recalibration, ir.rv(0), ir.rv(1), ref, ref_dict,
-                       fai, dbsnp, mem, unsafe, cores=job.cores)
+                       fai, dbsnp, mills, unsafe=unsafe, cores=job.cores, memory=job.memory)
     pr = job.wrapJobFn(run_print_reads, br.rv(), ir.rv(0), ir.rv(1), ref, ref_dict,
-                       fai, mem, unsafe, cores=job.cores)
+                       fai, unsafe, cores=job.cores, memory=job.memory)
     # Wiring
     job.addChild(rtc)
     rtc.addChild(ir)
@@ -210,7 +209,7 @@ def run_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
 
 
 def run_gatk_preprocessing(job, bam_id, bai_id, ref, ref_dict, fai, phase, mills, dbsnp,
-                           file_size=10737418240, unsafe=False):
+                           unsafe=False):
     """
     Pre-processing steps for running the GATK Germline pipeline
 
