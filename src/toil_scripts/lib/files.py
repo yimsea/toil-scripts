@@ -3,6 +3,7 @@ import errno
 import os
 import shutil
 import tarfile
+from urlparse import urlparse
 
 from bd2k.util.files import mkdir_p
 
@@ -53,22 +54,21 @@ def copy_file_job(job, name, file_id, output_dir):
     copy_files([fpath], output_dir)
 
 
-def copy_to(filename, output_dir, work_dir=None):
+def copy_to(filename, work_dir, output_dir):
     """
-    Moves files from the working directory to the output directory.
+    Copies file or directory to output directory
 
-    :param work_dir: the working directory
-    :param output_dir: the output directory
-    :param filenames: remaining arguments are filenames
+    :param str filename: basename of file path
+    :param str work_dir: working directory path
+    :param str output_dir: the output directory path
+    :return path to copied file or directory
+    :rtype: str
     """
-    if os.path.isabs(filename):
-        origin = filename
-        filename = os.path.basename(filename)
-    elif work_dir is None:
-        origin = os.path.abspath(filename)
-    else:
-        origin = os.path.join(work_dir, filename)
+    origin = os.path.abspath(os.path.join(work_dir, filename))
     dest = os.path.join(output_dir, filename)
+
+    # This method will copy a file or directory.
+    # http://stackoverflow.com/questions/1994488/copy-file-or-directory-in-python
     try:
         shutil.copytree(origin, dest)
     except OSError as e:
@@ -78,22 +78,32 @@ def copy_to(filename, output_dir, work_dir=None):
         else:
             raise e
     assert os.path.exists(dest)
+    return dest
 
 
-def upload_or_move_job(job, filename, file_id, output_dir, ssec=None):
+def upload_or_move_job(job, filename, file_id, output_dir, s3_key_path=None):
+    """
+    Uploads a file from the FileStore to an output directory on the local filesystem or S3.
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param str filename: basename for file
+    :param str file_id: FileStoreID
+    :param str output_dir: Amazon S3 URL or PATH
+    :param str s3_key_path: (OPTIONAL) Path to 32-byte key to be used for SSE-C encryption
+    :return:
+    """
     job.fileStore.logToMaster('Writing {} to {}'.format(filename, output_dir))
     work_dir = job.fileStore.getLocalTempDir()
     filepath = job.fileStore.readGlobalFile(file_id, os.path.join(work_dir, filename))
-    # are we moving this into a local dir, or up to s3?
-    if output_dir.startswith('s3://'):
+    if urlparse(output_dir).scheme == 's3':
         s3am_upload(fpath=os.path.join(work_dir, filepath),
                     s3_dir=output_dir,
-                    s3_key_path=ssec)
-    elif not os.path.exists(os.path.join(output_dir, filename)):
-        mkdir_p(output_dir)
-        copy_to(filepath, output_dir, work_dir)
-    else:
+                    s3_key_path=s3_key_path)
+    elif os.path.exists(os.path.join(output_dir, filename)):
         job.fileStore.logToMaster("File already exists: {}".format(filename))
+    else:
+        mkdir_p(output_dir)
+        copy_to(filename, work_dir, output_dir)
 
 
 def consolidate_tarballs_job(job, fname_to_id):
@@ -127,39 +137,40 @@ def consolidate_tarballs_job(job, fname_to_id):
     return job.fileStore.writeGlobalFile(out_tar)
 
 
-def untargz(input_targz_file, untar_to_dir):
-    """
-    Expands a tar.gz file
-
-    :param str input_targz_file:
-    :param str untar_to_dir: path to untar-ed directory/file
-    :return: path to untar-ed archive
-    :rtype: str
-    """
-    assert tarfile.is_tarfile(input_targz_file), 'Not a tar file.\n%s' % input_targz_file
-    tarball = tarfile.open(input_targz_file)
-    return_value = os.path.join(untar_to_dir, tarball.getmembers()[0].name)
-    tarball.extractall(path=untar_to_dir)
-    tarball.close()
-    return return_value
-
-
 def get_files_from_filestore(job, work_dir, input_dict):
     """
-    Copies files from the file store to a work directory. Will expand tar/gzipped files.
+    Copies files from the file store to a work directory. Will expand TAR files.
 
-    :param JobFunctionWrappingJob job: Toil Job instance
+    :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str work_dir: current working directory
     :param dict input_dict: {filename: fileStoreID}
     :return: {filename: filepath}
     :rtype: dict
     """
     for name, fileStoreID in input_dict.iteritems():
-        if not os.path.exists(os.path.join(work_dir, name)):
-            file_path = job.fileStore.readGlobalFile(fileStoreID, os.path.join(work_dir, name))
-        else:
+        if os.path.exists(os.path.join(work_dir, name)):
             file_path = name
+        else:
+            file_path = job.fileStore.readGlobalFile(fileStoreID, os.path.join(work_dir, name))
+        # Unpack tarfiles
         if tarfile.is_tarfile(file_path):
             file_path = untargz(file_path, work_dir)
         input_dict[name] = file_path
     return input_dict
+
+
+def untargz(input_file, output_dir):
+    """
+    Expands a tar or tar.gz file
+
+    :param str input_file:
+    :param str output_dir: path to untar-ed directory/file
+    :return: path to expanded archive
+    :rtype: str
+    """
+    assert tarfile.is_tarfile(input_file), 'Not a tar file.\n%s' % input_file
+    tarball = tarfile.open(input_file)
+    return_value = os.path.join(output_dir, tarball.getmembers()[0].name)
+    tarball.extractall(path=output_dir)
+    tarball.close()
+    return return_value

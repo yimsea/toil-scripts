@@ -61,7 +61,7 @@ def docker_call(tool,
         assert(os.path.isfile(os.path.join(work_dir, filename)))
 
     if mock:
-        for filename, url in outputs.iteritems():
+        for filename, url in outputs.items():
             file_path = os.path.join(work_dir, filename)
             if url is None:
                 # create mock file

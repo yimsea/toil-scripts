@@ -30,11 +30,10 @@ def download_url(url, work_dir='.', name=None, synapse_login=None, s3_key_path=N
     elif parsed_url.scheme == 'file':
         shutil.copy(urlparse(url).path, file_path)
     elif url.startswith('syn'):
-        if synapse_login:
-            stored_file = synapse_login.get(url, downloadLocation=work_dir)
-            file_path = stored_file.path
-        else:
-            raise ValueError('Synapse login was not provided!')
+        require(synapse_login is not None,
+                'Synapse login was not provided! Tried to download: %s' % url)
+        stored_file = synapse_login.get(url, downloadLocation=work_dir)
+        file_path = stored_file.path
     else:
         subprocess.check_call(['curl', '-fs', '--retry', '5', '--create-dir', url, '-o', file_path])
     assert os.path.exists(file_path)

@@ -37,8 +37,7 @@ def run_cutadapt(job, r1_id, r2_id, fwd_3pr_adapter, rev_3pr_adapter):
         parameters.extend(['-o', '/data/R1_cutadapt.fastq', '/data/R1.fastq'])
     # Call: CutAdapt
     docker_call(tool='quay.io/ucsc_cgl/cutadapt:1.9--6bd44edd2b8f8f17e25c5a268fedaab65fa851d2',
-                work_dir=work_dir,
-                parameters=parameters)
+                work_dir=work_dir, parameters=parameters)
     # Write to fileStore
     if r1_id and r2_id:
         r1_cut_id = job.fileStore.writeGlobalFile(os.path.join(work_dir, 'R1_cutadapt.fastq'))
@@ -90,34 +89,11 @@ def run_samtools_index(job, bam_id):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'sample.bam.bai'))
 
 
-def run_samtools_view(job, bam_id, flag='0'):
-    """
-    Filters BAM file using SAM bitwise flag
-
-    :param str bam_id: BAM FileStoreID
-    :param str flag: SAM bitwise flags
-    :return str: BAM fileStoreID
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'input.bam'))
-    outputs = {'output.bam': None}
-    command = ['view',
-               '-b',
-               '-o', '/data/output.bam',
-               '-F', str(flag),
-               '-@', str(job.cores),
-               '/data/input.bam']
-    docker_call(work_dir=work_dir, parameters=command,
-                tool='quay.io/ucsc_cgl/samtools:1.3--256539928ea162949d8a65ca5c79a72ef557ce7c',
-                outputs=outputs)
-    outpath = os.path.join(work_dir, 'output.bam')
-    return job.fileStore.writeGlobalFile(outpath)
-
-
 def run_samtools_sort(job, bam_id):
     """
     Sorts BAM file using SAMtools
 
+    :param JobFunctionWrappingJob job: Toil Job instance
     :param str bam_id: BAM FileStoreID
     :return str: sorted BAM fileStoreID
     """
@@ -125,7 +101,6 @@ def run_samtools_sort(job, bam_id):
     job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'input.bam'))
     command = ['sort',
                '-@', str(job.cores),
-               '-m', str(job.memory),
                '-o', '/data/output.bam',
                '/data/input.bam']
 
@@ -159,44 +134,13 @@ def run_picard_create_sequence_dictionary(job, ref_id):
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'ref.dict'))
 
 
-def picard_sort_sam(job, bam_id):
-    """
-    Uses picardtools SortSam to sort a BAM file
-
-    :param bam_id str: BAM FileStoreID
-    :param xmx: Java memory allocation
-    :return: Processed BAM and BAI FileStoreIDs
-    :rtype: tuple
-    """
-    work_dir = job.fileStore.getLocalTempDir()
-    job.fileStore.readGlobalFile(bam_id, os.path.join(work_dir, 'input.bam'))
-    command = ['SortSam',
-               'INPUT=input.bam',
-               'OUTPUT=sorted.bam',
-               'SORT_ORDER=coordinate',
-               'CREATE_INDEX=true']
-
-    outputs={'sorted.bam': None, 'sorted.bai': None}
-    # picard-tools inhibits modifying java options, so use _JAVA_OPTIONS env variable
-    docker_call(work_dir=work_dir,
-                parameters=command,
-                env={'_JAVA_OPTIONS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
-                tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
-                outputs=outputs)
-    outpath_bam = os.path.join(work_dir, 'sorted.bam')
-    outpath_bai = os.path.join(work_dir, 'sorted.bai')
-    bam_id = job.fileStore.writeGlobalFile(outpath_bam)
-    bai_id = job.fileStore.writeGlobalFile(outpath_bai)
-    return bam_id, bai_id
-
-
 def picard_mark_duplicates(job, bam_id, bai_id):
     """
     Runs picardtools MarkDuplicates. Assumes the BAM file is coordinate sorted.
 
+    :param JobFunctionWrappingJob job: passed automatically by Toil
     :param bam_id: BAM FileStoreID
     :param bai_id: BAI FileStoreID
-    :param xmx: Java memory allocation
     :return: Processed BAM and BAI FilestoreIDs
     :rtype: tuple
     """
@@ -219,7 +163,7 @@ def picard_mark_duplicates(job, bam_id, bai_id):
     outputs={'sample.mkdups.bam': None, 'sample.mkdups.bai': None}
     docker_call(work_dir=work_dir,
                 parameters=command,
-                env={'_JAVA_OPTIONS':'-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
+                env={'_JAVA_OPTIONS': '-Djava.io.tmpdir=/data/ -Xmx{}'.format(job.memory)},
                 tool='quay.io/ucsc_cgl/picardtools:1.95--dd5ac549b95eb3e5d166a5e310417ef13651994e',
                 outputs=outputs)
 
@@ -230,7 +174,7 @@ def picard_mark_duplicates(job, bam_id, bai_id):
     return bam_id, bai_id
 
 
-def run_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
+def run_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
                       mem=10737418240, unsafe=False):
     """
     Convenience method for grouping together GATK preprocessing
@@ -265,14 +209,20 @@ def run_preprocessing(job, cores, bam, bai, ref, ref_dict, fai, phase, mills, db
     return pr.rv(0), pr.rv(1)
 
 
-def run_gatk_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp,
+def run_gatk_preprocessing(job, bam_id, bai_id, ref, ref_dict, fai, phase, mills, dbsnp,
                            file_size=10737418240, unsafe=False):
     """
     Pre-processing steps for running the GATK Germline pipeline
 
+    0: Mark Duplicates
+    1: Create INDEL realignment intervals
+    2: Realign INDELS
+    3: Recalibrate Base Quality Scores
+    4: Recalibrate Reads
+
     :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str bam: Sample BAM FileStoreID
-    :param str bai: Bam Index FileStoreID
+    :param str bam_id: Sample BAM FileStoreID
+    :param str bai_id: Bam Index FileStoreID
     :param str ref: Reference genome FileStoreID
     :param str ref_dict: Reference dictionary FileStoreID
     :param str fai: Reference index FileStoreID
@@ -287,10 +237,11 @@ def run_gatk_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsn
     # MarkDuplicates runs best when Xmx <= 10G
     mdups_memory = min(10737418240, job.memory)
     mdups = job.wrapJobFn(picard_mark_duplicates,
-                          bam, bai,
-                          memory=mdups_memory, cores=job.cores, disk=file_size)
+                          bam_id, bai_id,
+                          memory=mdups_memory, cores=job.cores, disk=2 * file_size)
 
-    realigner_target_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
+    # Estimate disk resource as twice the input bam plus 10G of reference data
+    realigner_target_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
                                                 mdups.rv(0))
     realigner_target = job.wrapJobFn(run_realigner_target_creator,
                                      mdups.rv(0), mdups.rv(1),
@@ -299,18 +250,20 @@ def run_gatk_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsn
                                      unsafe=unsafe,
                                      memory=job.memory, disk=realigner_target_disk, cores=job.cores)
 
-    indel_realign_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
+    # Estimate disk resource as twice the input bam plus 10G of reference data
+    indel_realign_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
                                              mdups.rv(0))
     indel_realign = job.wrapJobFn(run_indel_realignment,
                                   realigner_target.rv(),
-                                  bam, bai,
+                                  mdups.rv(0), mdups.rv(1),
                                   ref, ref_dict, fai,
                                   phase, mills,
                                   unsafe=unsafe,
                                   memory=job.memory, disk=indel_realign_disk, cores=job.cores)
 
-    base_recal_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
-                                          mdups.rv(0))
+    # Estimate disk resource as twice the input bam plus 10G of reference data
+    base_recal_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
+                                          indel_realign.rv(0))
     base_recal = job.wrapJobFn(run_base_recalibration,
                                indel_realign.rv(0),
                                indel_realign.rv(1),
@@ -319,8 +272,9 @@ def run_gatk_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsn
                                unsafe=unsafe,
                                memory=job.memory, disk=base_recal_disk, cores=job.cores)
 
-    recalibrate_reads_disk = PromisedRequirement(lambda x: 2 * x.size + human2bytes('10G'),
-                                                 mdups.rv(0))
+    # Estimate disk resource as twice the input bam plus 10G of reference data
+    recalibrate_reads_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
+                                                 indel_realign.rv(0))
     recalibrate_reads = job.wrapJobFn(run_print_reads,
                                       base_recal.rv(),
                                       indel_realign.rv(0), indel_realign.rv(1),
