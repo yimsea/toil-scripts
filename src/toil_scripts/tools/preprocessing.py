@@ -174,44 +174,10 @@ def picard_mark_duplicates(job, bam_id, bai_id):
     return bam_id, bai_id
 
 
-def run_preprocessing(job, bam, bai, ref, ref_dict, fai, phase, mills, dbsnp, unsafe=False):
-    """
-    Convenience method for grouping together GATK preprocessing
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param str bam: Sample BAM FileStoreID
-    :param str bai: Bam Index FileStoreID
-    :param str ref: Reference genome FileStoreID
-    :param str ref_dict: Reference dictionary FileStoreID
-    :param str fai: Reference index FileStoreID
-    :param str phase: Phase VCF FileStoreID
-    :param str mills: Mills VCF FileStoreID
-    :param str dbsnp: DBSNP VCF FileStoreID
-    :param str mem: Memory value to be passed to children. Needed for CI tests
-    :param bool unsafe: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
-    :return: BAM and BAI FileStoreIDs from Print Reads
-    :rtype: tuple(str, str)
-    """
-    rtc = job.wrapJobFn(run_realigner_target_creator, bam, bai, ref, ref_dict,
-                        fai, phase, mills, unsafe, cores=job.cores, memory=job.memory)
-    ir = job.wrapJobFn(run_indel_realignment, rtc.rv(), bam, bai, ref, ref_dict,
-                       fai, phase, mills, unsafe, cores=job.cores, memory=job.memory)
-    br = job.wrapJobFn(run_base_recalibration, ir.rv(0), ir.rv(1), ref, ref_dict,
-                       fai, dbsnp, mills, unsafe=unsafe, cores=job.cores, memory=job.memory)
-    pr = job.wrapJobFn(run_print_reads, br.rv(), ir.rv(0), ir.rv(1), ref, ref_dict,
-                       fai, unsafe, cores=job.cores, memory=job.memory)
-    # Wiring
-    job.addChild(rtc)
-    rtc.addChild(ir)
-    ir.addChild(br)
-    br.addChild(pr)
-    return pr.rv(0), pr.rv(1)
-
-
 def run_gatk_preprocessing(job, bam_id, bai_id, ref, ref_dict, fai, phase, mills, dbsnp,
                            unsafe=False):
     """
-    Pre-processing steps for running the GATK Germline pipeline
+    GATK Preprocessing Pipeline
 
     0: Mark Duplicates
     1: Create INDEL realignment intervals
@@ -283,7 +249,7 @@ def run_gatk_preprocessing(job, bam_id, bai_id, ref, ref_dict, fai, phase, mills
 
     recalibrate_reads_disk = PromisedRequirement(lambda bam: 2 * bam.size + human2bytes('10G'),
                                                  indel_realign.rv(0))
-    recalibrate_reads = job.wrapJobFn(run_print_reads,
+    recalibrate_reads = job.wrapJobFn(apply_bqsr_recalibration,
                                       base_recal.rv(),
                                       indel_realign.rv(0),
                                       indel_realign.rv(1),
@@ -453,9 +419,9 @@ def run_base_recalibration(job, bam, bai, ref, ref_dict, fai, dbsnp, mills, unsa
     return job.fileStore.writeGlobalFile(os.path.join(work_dir, 'recal_data.table'))
 
 
-def run_print_reads(job, table, bam, bai, ref, ref_dict, fai, unsafe=False):
+def apply_bqsr_recalibration(job, table, bam, bai, ref, ref_dict, fai, unsafe=False):
     """
-    Creates BAM that has had the base quality scores recalibrated
+    Creates BAM with recalibrated base quality scores
 
     :param JobFunctionWrappingJob job: passed automatically by Toil
     :param str table: Recalibration table FileStoreID
@@ -465,7 +431,7 @@ def run_print_reads(job, table, bam, bai, ref, ref_dict, fai, unsafe=False):
     :param str ref_dict: Reference dictionary FileStoreID
     :param str fai: Reference index FileStoreID
     :param bool unsafe: If True, runs gatk UNSAFE mode: "-U ALLOW_SEQ_DICT_INCOMPATIBILITY"
-    :return: FileStoreID for the processed bam
+    :return: BAM and BAI FileStoreIDs
     :rtype: tuple(str, str)
     """
     work_dir = job.fileStore.getLocalTempDir()
@@ -482,7 +448,6 @@ def run_print_reads(job, table, bam, bai, ref, ref_dict, fai, unsafe=False):
     parameters = ['-T', 'PrintReads',
                   '-nct', str(job.cores),
                   '-R', '/data/ref.fasta',
-                  '--emit_original_quals',
                   '-I', '/data/input.bam',
                   '-BQSR', '/data/recal.table',
                   '-o', '/data/bqsr.bam']
